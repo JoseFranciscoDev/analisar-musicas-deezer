@@ -182,10 +182,12 @@ def salvar_resultados_em_csv(
 def main():
     # Playlist inicial ja definida pelo usuario.
     # PAIS_ASSOCIADO_PLAYLIST: como a API nao informa o pais de uma
-    # playlist comum, ajuste esse valor manualmente se for relevante
-    # para a sua analise (ex.: "Brasil").
     playlists_para_coletar = [
-        {"id_da_playlist": "1116189381", "pais_associado_playlist": "Top músicas Brasil"},
+        {"id_da_playlist": "1111141961", "pais_associado_playlist": "Top músicas Brasil"},  # brasil
+        {"id_da_playlist": "1109890291", "pais_associado_playlist": "Top músicas França"},  # franca
+        {"id_da_playlist": "1111142361", "pais_associado_playlist": "Top músicas México"},
+        {"id_da_playlist": "1111143121", "pais_associado_playlist": "Top músicas Alemanha"},
+        {"id_da_playlist": "1313621735", "pais_associado_playlist": "Top músicas Estados unidos"},
     ]
 
     print("=== Coleta de dados de playlists - API Deezer ===\n")
