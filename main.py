@@ -1,113 +1,173 @@
-import requests
 import csv
 import time
 
-PAISES = ["Colombia", "Uruguay", "Argentina", "Peru"]
-BASE_URL = "https://api.deezer.com"
+import requests
+
+URL_BASE_API_DEEZER = "https://api.deezer.com"
+
+# Cache simples para nao buscar o mesmo album mais de uma vez
+cache_genero_por_album = {}
 
 
-def buscar_playlist(pais):
-    """Busca playlists com o termo 'Top <País>' e retorna as opções encontradas."""
-    resp = requests.get(f"{BASE_URL}/search/playlist", params={"q": f"Top {pais}"})
-    resp.raise_for_status()
-    data = resp.json().get("data", [])
-    return data
-
-
-def escolher_playlist_oficial(resultados, pais):
+def buscar_genero_do_album(id_do_album):
     """
-    Tenta identificar automaticamente a playlist oficial do Deezer
-    (geralmente criada pelo usuário 'Deezer' e com nome parecido com 'Top Colombia').
-    Se não achar com confiança, mostra as opções para você escolher manualmente.
+    Busca o genero musical de um album na API do Deezer.
+    Retorna o nome do primeiro genero encontrado, ou 'Genero nao informado'
+    caso o album nao tenha genero cadastrado.
     """
-    candidatas = []
-    for p in resultados:
-        nome = p.get("title", "")
-        criador = p.get("user", {}).get("name", "")
-        if pais.lower() in nome.lower():
-            candidatas.append(p)
+    if id_do_album in cache_genero_por_album:
+        return cache_genero_por_album[id_do_album]
 
-    # Prioriza playlists criadas pelo próprio Deezer
-    oficiais = [p for p in candidatas if p.get("user", {}).get("name", "").lower() == "deezer"]
-    if len(oficiais) == 1:
-        return oficiais[0]
+    url_album = f"{URL_BASE_API_DEEZER}/album/{id_do_album}"
+    resposta_album = requests.get(url_album)
+    dados_album = resposta_album.json()
 
-    print(f"\n--- Múltiplas opções para '{pais}', escolha manualmente ---")
-    lista = oficiais if oficiais else candidatas
-    for i, p in enumerate(lista):
-        print(f"[{i}] id={p['id']} | título='{p['title']}' | criador='{p.get('user', {}).get('name')}' | faixas={p.get('nb_tracks')}")
+    lista_generos = dados_album.get("genres", {}).get("data", [])
+    if lista_generos:
+        if lista_generos[0].get("name"):
+            for genero_indice in range(len(lista_generos)):
+                nome_genero = lista_generos[genero_indice].get("name", "Genero nao informado")
+    else:
+        nome_genero = "Genero nao informado"
 
-    if not lista:
-        print(f"Nenhuma playlist encontrada para {pais}. Tente buscar manualmente no site do Deezer.")
-        return None
-
-    idx = int(input("Digite o índice da playlist correta: "))
-    return lista[idx]
+    cache_genero_por_album[id_do_album] = nome_genero
+    return nome_genero
 
 
-def buscar_faixas_playlist(playlist_id):
-    """Retorna todas as faixas de uma playlist, seguindo paginação se houver."""
-    faixas = []
-    url = f"{BASE_URL}/playlist/{playlist_id}/tracks"
-    params = {"limit": 100}
+def coletar_faixas_da_playlist(id_da_playlist, pais_associado_playlist):
+    """
+    Busca todas as faixas de uma playlist do Deezer e monta uma lista
+    de dicionarios com os dados de interesse de cada faixa.
+    """
+    url_playlist = f"{URL_BASE_API_DEEZER}/playlist/{id_da_playlist}"
+    resposta_playlist = requests.get(url_playlist)
+    dados_playlist = resposta_playlist.json()
 
-    while url:
-        resp = requests.get(url, params=params)
-        resp.raise_for_status()
-        payload = resp.json()
-        faixas.extend(payload.get("data", []))
-        url = payload.get("next")  # Deezer já devolve a próxima URL pronta
-        params = {}  # os parâmetros já vêm embutidos na URL 'next'
-        time.sleep(0.2)  # gentileza com o rate limit (50 req / 5s)
+    if "error" in dados_playlist:
+        print(
+            f"  Erro ao buscar playlist {id_da_playlist}: {dados_playlist['error'].get('message')}"
+        )
+        return []
 
-    return faixas
+    nome_da_playlist = dados_playlist.get("title", "Titulo desconhecido")
+    lista_de_faixas = dados_playlist.get("tracks", {}).get("data", [])
+
+    print(f"  Playlist: {nome_da_playlist} | {len(lista_de_faixas)} faixas encontradas")
+
+    dados_coletados = []
+
+    for faixa in lista_de_faixas:
+        nome_da_musica = faixa.get("title")
+        nome_do_autor = faixa.get("artist", {}).get("name")
+        id_do_album = faixa.get("album", {}).get("id")
+        popularidade_estim_rank = faixa.get("rank")
+
+        genero_musical = (
+            buscar_genero_do_album(id_do_album) if id_do_album else "Genero nao informado"
+        )
+
+        dados_coletados.append(
+            {
+                "id_playlist": id_da_playlist,
+                "nome_playlist": nome_da_playlist,
+                "pais_associado_playlist": pais_associado_playlist,
+                "nome_da_musica": nome_da_musica,
+                "nome_do_autor": nome_do_autor,
+                "genero_musical": genero_musical,
+                "popularidade_estim_rank": popularidade_estim_rank,
+            }
+        )
+
+        # pequena pausa para nao sobrecarregar a API publica
+        time.sleep(0.1)
+
+    return dados_coletados
+
+
+def perguntar_lista_de_playlists():
+    """
+    Pergunta ao usuario, em loop, quais playlists (id + pais associado)
+    ele quer incluir na coleta. Digite vazio no ID para encerrar.
+    """
+    playlists_informadas = []
+
+    print("Informe as playlists que deseja coletar.")
+    print("(pressione Enter sem digitar nada no ID para finalizar a lista)\n")
+
+    while True:
+        id_da_playlist = input("ID da playlist: ").strip()
+        if id_da_playlist == "":
+            break
+
+        pais_associado_playlist = input(
+            "Pais associado a essa playlist (ou Enter para deixar em branco): "
+        ).strip()
+        if pais_associado_playlist == "":
+            pais_associado_playlist = "Nao informado"
+
+        playlists_informadas.append(
+            {
+                "id_da_playlist": id_da_playlist,
+                "pais_associado_playlist": pais_associado_playlist,
+            }
+        )
+        print()
+
+    return playlists_informadas
+
+
+def salvar_resultados_em_csv(
+    todos_os_dados_coletados, caminho_do_arquivo="dados_playlists_deezer.csv"
+):
+    """
+    Salva a lista de dicionarios coletados em um arquivo CSV.
+    """
+    if not todos_os_dados_coletados:
+        print("Nenhum dado para salvar.")
+        return
+
+    colunas = todos_os_dados_coletados[0].keys()
+
+    with open(caminho_do_arquivo, mode="w", newline="", encoding="utf-8") as arquivo_csv:
+        escritor_csv = csv.DictWriter(
+            arquivo_csv,
+            fieldnames=colunas,
+            delimiter=";",
+        )
+        escritor_csv.writeheader()
+        escritor_csv.writerows(todos_os_dados_coletados)
+
+    print(f"\nDados salvos em: {caminho_do_arquivo}")
 
 
 def main():
-    linhas_saida = []
+    # Playlist inicial ja definida pelo usuario.
+    # PAIS_ASSOCIADO_PLAYLIST: como a API nao informa o pais de uma
+    playlists_para_coletar = [
+        {"id_da_playlist": "1111141961", "pais_associado_playlist": "Top músicas Brasil"},  # brasil
+        # {"id_da_playlist": "1109890291", "pais_associado_playlist": "Top músicas França"},  # franca
+        # {"id_da_playlist": "1111142361", "pais_associado_playlist": "Top músicas México"},
+        # {"id_da_playlist": "1111143121", "pais_associado_playlist": "Top músicas Alemanha"},
+        # {"id_da_playlist": "1313621735", "pais_associado_playlist": "Top músicas Estados unidos"},
+    ]
 
-    for pais in PAISES:
-        print(f"\n=== Buscando playlist Top {pais} ===")
-        resultados = buscar_playlist(pais)
-        playlist = escolher_playlist_oficial(resultados, pais)
+    print("=== Coleta de dados de playlists - API Deezer ===\n")
 
-        if playlist is None:
-            continue
+    resposta_usuario = input("Deseja adicionar mais playlists agora? (s/n): ").strip().lower()
+    if resposta_usuario == "s":
+        playlists_para_coletar.extend(perguntar_lista_de_playlists())
 
-        print(f"Playlist escolhida: '{playlist['title']}' (id={playlist['id']}, {playlist.get('nb_tracks')} faixas)")
-        faixas = buscar_faixas_playlist(playlist["id"])
-        print(f"Faixas obtidas: {len(faixas)}")
+    todos_os_dados_coletados = []
 
-        for posicao, faixa in enumerate(faixas, start=1):
-            linhas_saida.append({
-                "pais": pais,
-                "posicao": posicao,
-                "track_id": faixa.get("id"),
-                "titulo": faixa.get("title"),
-                "artista": faixa.get("artist", {}).get("name"),
-                "album": faixa.get("album", {}).get("title"),
-                "duration_seg": faixa.get("duration"),
-                "rank": faixa.get("rank"),
-                # Preencha manualmente depois de revisar:
-                "e_brasileira": "",
-                "genero_estimado": "",
-            })
+    for playlist in playlists_para_coletar:
+        print(f"\nColetando playlist {playlist['id_da_playlist']}...")
+        dados_da_playlist = coletar_faixas_da_playlist(
+            id_da_playlist=playlist["id_da_playlist"],
+            pais_associado_playlist=playlist["pais_associado_playlist"],
+        )
+        todos_os_dados_coletados.extend(dados_da_playlist)
 
-        time.sleep(0.5)
-
-    # Salva tudo em um único CSV para checagem manual no Excel/Sheets
-    campos = ["pais", "posicao", "track_id", "titulo", "artista", "album",
-              "duration_seg", "rank", "e_brasileira", "genero_estimado"]
-
-    with open("top_paises_bruto.csv", "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=campos)
-        writer.writeheader()
-        writer.writerows(linhas_saida)
-
-    print(f"\nConcluído! {len(linhas_saida)} faixas salvas em 'top_paises_bruto.csv'.")
-    print("Abra o CSV e preencha manualmente as colunas 'e_brasileira' (sim/nao)")
-    print("e 'genero_estimado' (ex: sertanejo, funk, mpb, pop, axe...) para as que forem.")
+    salvar_resultados_em_csv(todos_os_dados_coletados)
 
 
-if __name__ == "__main__":
-    main()
+main()
